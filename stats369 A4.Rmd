@@ -1,0 +1,292 @@
+---
+title: "STATS369 A4"
+author: "Lin Lin"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE, message=FALSE, error=FALSE, warning=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(dplyr)
+library(ggplot2)
+library(glmnet)
+library(ranger)
+library(xgboost)
+```
+
+
+# Task 1
+
+### (a) & (b)
+
+```{r}
+# Set seed
+set.seed(829)
+
+# Load data
+bank.df <- read.csv('bank_marketing.csv', sep = ";")
+head(bank.df)
+
+sum(is.na(bank.df))
+```
+
+### (c)
+
+1. The 'duration' variable should be discarded as it not known before the call is performed and y is known after call. It is not conducive to a model whose main focus is prediction. Hence, this input should be discarded if the intention is to have a realistic predictive model.
+
+2. 'Day of week' should be removed as the day of week seems not play a significant role whether client subscribe or not. Similarly, month can be removed as well.
+
+3. 'Contact' could also be removed as it doesn't affect the outcome.
+
+4. 'pdays' is number of days that passed by after the client was last contacted from a previous campaign, this factor might not be significant for prediction as most of values are 999.
+
+5. 'poutcome' is the outcome of the previous marketing campaign, most of value is 'nonexistent' indicate that the result of previous campaign might not affect prediction a lot.
+
+6. The index variables could be removed as they are not meaningful.
+
+
+# Task 2
+
+### (a)
+
+```{r, error=FALSE}
+set.seed(829)
+
+# Discard variables
+banknew.df <- bank.df %>% 
+  select(-c(contact, month, day_of_week, duration, pdays, poutcome, cons_price_idx, cons_conf_idx))
+
+# Recode 'y' as 0 and 1
+banknew.df$y <- ifelse(banknew.df$y == "no", 0, 1)
+banknew.df$y <- as.factor(banknew.df$y)
+
+# Split the data into 90% training and 10% test sets
+idx <- sample(1:nrow(banknew.df), 0.9 * nrow(banknew.df))
+train.df <- banknew.df[idx,]
+test.df <- banknew.df[-idx,]
+```
+
+
+### (b) & (c)
+
+
+```{r}
+# Create a box plot that show the relationship between age and subscription
+banknew.df %>%
+  ggplot() +
+  geom_boxplot(aes(x = y, 
+             y = age,
+             fill = y)) +
+  labs(title = 'Age vs subscription',
+       x ='Subscription',
+       y = 'Age') +
+  theme_minimal()
+```
+
+From box plot we can see the distribution of ages for each subscription category. The median of age for both groups are similar whereas the 'no' group is shorter than the 'yes' group, indicating less variability in the ages of subscribers. 
+
+
+
+```{r}
+# Create bar plot show the proportion of subscription for each type of job
+banknew.df %>%
+  ggplot() +
+  geom_bar(aes(x = job,
+             fill = y), position = 'fill') +
+  labs(title = 'Subscription rate by Job',
+       x = 'Job',
+       y = 'proportion',
+       fill = 'subscription') +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) # Rotate the text at a 45 degree angle and easy for reading
+```
+
+The bar plot shows the proportion of 'yes' and 'no' subscriptions for each job category. Different colors distinguish subscribers from non-subscribers. The retired group and student group has the most of proportion of subscriptions which seems reasonable, since retired people need savings for their later life and students usually have deposit for their future study cost.
+
+
+### (d)
+
+1. Job might be important. Job type relate to client's income level and stability. Higher salaries making them more likely to invest in financial products such as stock or term deposit. On the contrary, people with less income are less likely to have term deposit. Therefore, job type is a key attribute that affects whether a client subscribes.
+
+2. Age is another variable that may important in predicting. For example, middle-aged clients might have more savings and higher risk awareness that securing their future compared to younger clients. Also, older clients at retire stage, specifically over 65 years old tend to have more savings to secure their later life and cover medical costs etc.
+
+3. Education can play an important role in predicting subscription. People with higher education levels might have higher incomes and a better understanding of financial knowledge leading them to subscribe term deposit and get certain return annually. On the other hand, the level of education is not absolute, there are low-level educators will also have regular term deposit, but the level of education can reflect the trend of subscription to a certain extent.
+
+
+# Task 3
+
+### (a)
+
+```{r, warning=FALSE}
+set.seed(829)
+
+
+# Create logistic regression model
+logistic_model <- glm(y ~ ., family = 'binomial', data = train.df)
+
+
+
+
+# Create ridge regression model
+x.train <- model.matrix(y ~ ., train.df)[, -1] # create training matrix for x
+y.train <- as.numeric(train.df$y) - 1 # Numeric to have 0 and 1 as response categories
+x.test <- model.matrix(y~., data = test.df)[,-1] # Create test matrix for x
+lambdas <- 2^ seq(6, -4, length = 100) # lambda values
+
+# cross validate with glmnet
+ridge.cv <- cv.glmnet(x.train, y.train, family = 'binomial', alpha = 0, lambda = lambdas)
+
+# Get best lambda from cross validation model
+best_lambda <- ridge.cv$lambda.1se
+ridge_model <- glmnet(x.train, y.train, alpha = 0, family = "binomial", lambda = best_lambda)
+
+
+
+
+# Create Random Forest
+forest_model <- ranger(y~., data = train.df, importance = 'impurity')
+
+
+
+
+
+# Create XGboost model
+xgb_train <- xgb.DMatrix(data = x.train, label = y.train) # Transform training data into Dmatrix format
+xgb_test <- xgb.DMatrix(data = x.test) # Transform test data into Dmatrix format
+
+#Create list of hyper-parameters
+params <- list(objective = "binary:logistic",
+               eval_metric = "logloss",
+               eta = 1,
+               max_depth = 3,
+               nthread = 2
+               )
+# Implement cross validation function
+xgb_cv <- xgb.cv(params = params,
+                 data = xgb_train,
+                 nrounds = 50, 
+                 nfold = 5,
+                 early_stopping_rounds = 10,
+                 verbose = 0)
+
+xgboost_model <- xgboost(params = params, data = xgb_train, nrounds = xgb_cv$best_iteration)
+
+```
+
+### (b)
+
+```{r, warning=FALSE}
+set.seed(829)
+
+# Make prediction for logistic model on test data
+logistic_preds <- predict(logistic_model, test.df, type = 'response')
+# Convert result of predictions to binary values 0 and 1
+logistic_preds_convert <- ifelse(logistic_preds > 0.5, 1, 0)
+# Create logistic confusion matrix
+logistic_conf_matrix <- table(actual = test.df$y, predicted = logistic_preds_convert)
+logistic_conf_matrix
+
+
+
+# Make prediction for ridge regression model on test data
+ridge_preds <- predict(ridge_model, s = best_lambda, x.test, type = 'response')
+# Convert result of predictions to binary values 0 and 1
+ridge_preds_convert <- ifelse(ridge_preds > 0.5, 1, 0)
+# Create ridge confusion matrix
+ridge_conf_matrix <- table(actual = test.df$y, predicted = ridge_preds_convert)
+ridge_conf_matrix
+
+
+
+# Make prediction for random forest model on test data
+forest_preds <- predict(forest_model, test.df)
+# Create random forest confusion matrix
+forest_conf_matrix <- table(actual = test.df$y, predicted = forest_preds$predictions)
+forest_conf_matrix
+
+
+
+# Make prediction for xgboost model on test data
+xgb_preds <- predict(xgboost_model, xgb_test)
+# Convert result of predictions to binary values 0 and 1
+xgb_preds_convert <- ifelse(xgb_preds > 0.5, 1, 0)
+# Create xgboost confusion matrix
+xgboost_conf_matrix <- table(actual = test.df$y, predicted = xgb_preds_convert)
+xgboost_conf_matrix
+```
+
+
+# Task 4
+
+### (a)
+
+```{r}
+# Extract variable importance from random forest
+ran_imp <- importance(forest_model)
+ran_imp[1:6]
+
+
+# Extract variable importance from xgboost
+xgb_imp <- xgb.importance(feature_names = colnames(x.train), model = xgboost_model)
+xgb_imp$Feature[1:6]
+
+```
+
+From result we can see that 'age' is one of common variables that appeared in both models. Hence, I will produce a plot showing how age related to y.
+
+```{r}
+ggplot(train.df, aes(x = age, fill = y)) +
+  geom_bar() +
+  labs(title = "Age by subscriptions",
+       x = "Age",
+       y = 'Frequency') +
+  theme_minimal()
+  
+```
+
+From plot we can see that people who aged between 30 and 40 have high rate of subscription to the bank term deposit. This because they may have progressed in their careers, earning higher salaries, and are more likely to have disposable income to invest. 
+
+
+### (b)
+
+```{r}
+# Calculate misclassification rate for each model
+
+# Misclassification rate of logistic model
+logistic_mis <- (logistic_conf_matrix[1, 2]+logistic_conf_matrix[2, 1])/sum(logistic_conf_matrix)
+logistic_mis
+
+# Misclassification rate of ridge model
+ridge_mis <- (ridge_conf_matrix[1, 2]+ridge_conf_matrix[2, 1])/sum(ridge_conf_matrix)
+ridge_mis
+
+# Misclassification rate of random forest model
+forest_mis <- (forest_conf_matrix[1, 2]+forest_conf_matrix[2, 1])/sum(forest_conf_matrix)
+forest_mis
+
+# Misclassification rate of xgboost model
+xgb_mis <- (xgboost_conf_matrix[1, 2]+xgboost_conf_matrix[2, 1])/sum(xgboost_conf_matrix)
+xgb_mis
+
+
+
+```
+From above results we can see that xgboost has the lowest misclassification rate, however, the difference in performance among the models is relatively small. 
+
+We actually more care about the figures of 'False Negative', which the model incorrectly predict that clients who will subscribe into not subscribe. This error could leading to potential business loss to the bank as thoes clients might not get promotion campaign. Therefore, we can see that ridge model has least false negative rate, which the model that we preferred.
+
+
+
+### (c)
+
+**Executive Summary:**
+
+In order to improve our bank's marketing strategies, we've undertaken a comprehensive analysis of data from previous marketing campaigns. Our primary objective is to understand the factors influencing a customer's decision to subscribe to a term deposit, allowing us to predict future customer behavior and adjust our marketing strategy accordingly. 
+
+To achieve this, we used machine learning techniques, creating advanced models including Logistic Regression, Ridge Regression, Random Forest, and Xgboost, each offering distinct predictive insights. Our findings indicated that the Xgboost model has the least statistical misclassification rate whereas the ridge regression model is preferred as it has least false negative rate. This is more critical from a business perspective in our marketing campaign. It's an good example of how business considerations regarding the choice of model, rather than simply looking at overall measures. 
+
+We also found that specific group of individuals, such as students and retired people, showed a higher probability towards subscribing. Moreover, age is also a key factor that revealing specific age groups showing a higher likelihood to subscribe. These perspectives can help us quickly target the market and segment the potential audience. We can develop a more approach to achieve further proactive marketing strategies, for example, understanding features like the number of times a client was contacted would significantly influence their decision. We can optimize our engagement frequency, ensure that we don't under or over-contact customers and personalize our approach based on individual profiles. 
+
+Overall, by analyzing data set, we're not just reacting to market trends, but proactively enhancing our strategies to meet customer needs, driving both customer satisfaction and our business growth. Moreover, it's important to note that while our models are powerful, they still have limitations and should be continuously improved and validated with new data for the most accurate predictions. 
+
