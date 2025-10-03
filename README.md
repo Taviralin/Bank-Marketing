@@ -1,4 +1,4 @@
-##Background
+### Background
 
 In this assignment, we explore a direct marketing campaign dataset from a Portuguese banking business. The marketing compaigns were based on phone calls. It is common for the bank to contact the same client multiple times, in order to access if the customer want so sign up to a banking product such as term deposit.
 
